@@ -77,6 +77,11 @@ enum Value{
     HIGH
 };
 
+
+
+
+
+
 #if defined(__AVR_ATmega324A__)
 
 void pinMode(int8_t pin, enum Mode value) {
@@ -188,6 +193,7 @@ void digitalWrite(int8_t pin, enum Value value) {
         }
     }
 }
+
 int8_t digitalRead(int8_t pin) {
     if (pin >= PB_5 && pin <= PB_5 + 3) { // PINB(5-7)
           return PINB & (1 << (pin + PB_OFF));                        
@@ -435,6 +441,155 @@ int8_t digitalRead(int8_t pin) {
 
 
 
+///////////////////////////////EXTERNAL INTERRUPTS ON EVERY PIN WITH BUTTON DEBOUNCING///////////////////////////////////////////////////
+
+
+volatile int8_t countButtonPress = 0;
+volatile uint8_t buttonState = 0;
+volatile uint8_t lastButtonState = 0;
+volatile uint8_t buttonStable = 0;
+volatile uint32_t debounceTime = 0;
+volatile uint64_t miliseconds = 0;
+
+const uint32_t debounceDelay = 50; // debounce delay (in milliseconds)
+
+
+
+// Pins atmega328p
+enum Pins {
+  P0 = PD0,
+  P1 = PD1,
+  P2 = PD2,
+  P3 = PD3,
+  P4 = PD4,
+  P5 = PD5,
+  P6 = PD6,
+  P7 = PD7,
+  P8 = PB0,
+  P9 = PB1,
+  P10 = PB2,
+  P11 = PB3,
+  P12 = PB4,
+  P13 = PB5,
+  P14 = PC0,
+  P15 = PC1,
+  P16 = PC2,
+  P17 = PC3,
+  P18 = PC4,
+  P19 = PC5,
+};
+
+
+enum Pins currentPin;
+
+
+void attach_interrupt_PCIE(uint8_t pin) {
+
+    if (pin >= 0 && pin <= 7) {
+        DDRD &= ~(1 << pin);
+        PORTD |= (1 << pin);
+
+        PCICR |= (1 << PCIE2); // Enable PCIE2
+        PCMSK2 |= (1 << pin); // Enable PCINT0
+    } else if (pin >= 8 && pin <= 13) {
+        DDRB &= ~(1 << (pin - 8));
+        PORTB |= (1 << (pin - 8));
+
+        PCICR |= (1 << PCIE0); // Enable PCIE1
+        PCMSK0 |= (1 << (pin - 8)); // Enable PCINT8
+    } else if (pin >= 14 && pin <= 19) {
+        DDRC &= ~(1 << (pin - 14));
+        PORTC |= (1 << (pin - 14));
+
+        PCICR |= (1 << PCIE1); // Enable PCIE2
+        PCMSK1 |= (1 << (pin - 14)); // Enable PCINT16
+    }
+    
+    sei(); // Enable global interrupts
+}
+
+ISR(PCINT0_vect) {
+    // Record the current time
+    debounceTime = 0;
+    // Update the button state
+    lastButtonState = buttonState;
+    buttonState = bit_is_set(PINB, currentPin); // to do : Make a verification for every pin not only current pin and make it universal, not only for button
+    // Signal that the button state has changed
+    buttonStable = 0;
+}
+
+ISR(PCINT1_vect) {
+    // Record the current time
+    debounceTime = 0;
+    // Update the button state
+    lastButtonState = buttonState;
+    buttonState = bit_is_set(PINC, currentPin);
+    // Signal that the button state has changed
+    buttonStable = 0;
+}
+
+ISR(PCINT2_vect) {
+    // Record the current time
+    debounceTime = 0;
+    // Update the button state
+    lastButtonState = buttonState;
+    buttonState = bit_is_set(PIND, currentPin);
+    // Signal that the button state has changed
+    buttonStable = 0;
+}
+
+
+ISR(TIMER1_COMPA_vect) {
+    // Increment the debounce time
+    debounceTime++;
+    // If the debounce delay has passed and the button state is stable
+    if (debounceTime >= debounceDelay && buttonStable == 0) {
+        // Signal that the button state is stable
+        buttonStable = 1;
+        // If the button state has changed from LOW to HIGH, increment value
+        if (buttonState && !lastButtonState) {
+            countButtonPress++; // count number of 
+        }
+    }
+
+    // Increment the miliseconds counter fro millis() function
+    miliseconds++;
+}
+
+
+
+/* Example how to use external interrupts:
+	
+	// Set interrup on pin 2
+	
+	currentPin = P2 (range P0-P19)
+	attach_interrupt_PCIE(2);
+	
+*/
+
+/////////////////////////////////////////////////////////////////////////////////
+
+
+ 
+void configure_timer() {
+    // Configure Timer1 for CTC mode
+    TCCR1B |= (1 << WGM12);
+    // Set prescaler to 64
+    TCCR1B |= (1 << CS11) | (1 << CS10);
+    // Set compare match value for 1ms intervals
+    OCR1A = 249; // For 1ms at 16MHz CPU clock with prescaler 64
+    // Enable Timer1 compare match A interrupt
+    TIMSK1 |= (1 << OCIE1A);
+    // Enable global interrupts
+    sei();
+
+}
+
+// function to return miliseconds past from the start of work
+uint64_t millis() {
+	return miliseconds;
+} 
+ 
  
 
 
@@ -714,26 +869,4 @@ void print_terminal(char *str)
   }
 }
 
-void set_timer_seconds(uint16_t value) {
-	TCCR1A = 0; 
-	TCCR1B = 0;
-	TCNT1 = 0;
-	TCCR1B |= (1 << WGM12); // CTC mode
-    TIMSK1 |= (1 << OCIE1A); // Enable Timer1 compare match A interrupt
-    sei(); // Enable global interrupts
-	
-	// set prescaler to 1024
-	TCCR1B |= (1 << CS12) | (1 << CS10);
-	OCR1A = value;
-	// formula: (16 * 10^6) / (1024 * 15624) - 1 = 1 // (1Hz) => OCR1A = 15624
-}
 
-volatile uint32_t counter = 0;
-
-ISR(TIMER1_COMPA_vect) {
-    counter++;
-}
-
-uint32_t get_seconds() {
-	return counter;
-}
